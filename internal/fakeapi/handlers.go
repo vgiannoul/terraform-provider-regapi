@@ -320,3 +320,12 @@ func (s *Server) applyPatch(d *domain, p client.DomainPatch) {
 		}
 	}
 }
+
+// AddContact stores a contact without going through the API and returns its ID.
+func (s *Server) AddContact(c client.Contact) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c.ID = s.id("con")
+	s.contacts[c.ID] = c
+	return c.ID
+}

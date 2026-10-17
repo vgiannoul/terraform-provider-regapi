@@ -86,7 +86,7 @@ func (p *regapiProvider) Configure(
 }
 
 func (p *regapiProvider) Resources(context.Context) []func() resource.Resource {
-	return []func() resource.Resource{NewContactResource}
+	return []func() resource.Resource{NewContactResource, NewAccountDefaultsResource}
 }
 
 func (p *regapiProvider) DataSources(context.Context) []func() datasource.DataSource {
