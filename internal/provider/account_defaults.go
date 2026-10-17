@@ -87,7 +87,9 @@ func (r *defaultsResource) Schema(
 	resp.Schema = schema.Schema{
 		Description: "The account's default contacts. Orders that name no contact for a role " +
 			"use these. Destroying the resource clears the administrative, technical and " +
-			"billing defaults; the default registrant stays because the API cannot clear it.",
+			"billing defaults; the default registrant stays because the API cannot clear it, " +
+			"so a contact that is the default registrant cannot be deleted afterwards. Use a " +
+			"registrant contact that Terraform does not manage.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{Computed: true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},

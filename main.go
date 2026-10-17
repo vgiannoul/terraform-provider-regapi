@@ -11,6 +11,8 @@ import (
 	"github.com/vgiannoul/terraform-provider-regapi/internal/provider"
 )
 
+//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-name regapi
+
 // version is set by GoReleaser.
 var version = "dev"
 
