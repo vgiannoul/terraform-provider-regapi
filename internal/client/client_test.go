@@ -137,3 +137,34 @@ func TestNotFoundIsRecognised(t *testing.T) {
 }
 
 func asAPIError(err error, target **client.APIError) bool { return errors.As(err, target) }
+
+func TestAPatchMatchesWhenTheDomainShowsEverythingItAsksFor(t *testing.T) {
+	reg, admin := "con_1", "con_2"
+	d := client.Domain{Nameservers: []string{"NS1.x.test", "ns2.x.test"}, AutoRenew: true,
+		Contacts: client.DomainContacts{Registrant: &reg, Admin: &admin}}
+	yes := true
+	ns := []string{"ns1.x.test", "ns2.x.test"}
+	empty := ""
+	for name, tc := range map[string]struct {
+		patch client.DomainPatch
+		want  bool
+	}{
+		"nameservers ignore case": {client.DomainPatch{Nameservers: &ns}, true},
+		"auto renew":              {client.DomainPatch{AutoRenew: &yes}, true},
+		"contact set":             {withContacts(client.ContactsPatch{Admin: &admin}), true},
+		"contact cleared but set": {withContacts(client.ContactsPatch{Admin: &empty}), false},
+		"contact cleared, unset":  {withContacts(client.ContactsPatch{Tech: &empty}), true},
+		"other contact":           {withContacts(client.ContactsPatch{Admin: &reg}), false},
+	} {
+		if got := tc.patch.Matches(d); got != tc.want {
+			t.Errorf("%s: Matches = %v, want %v", name, got, tc.want)
+		}
+	}
+	if !(client.DomainPatch{}).Empty() || (client.DomainPatch{AutoRenew: &yes}).Empty() {
+		t.Error("Empty is wrong")
+	}
+}
+
+func withContacts(p client.ContactsPatch) client.DomainPatch {
+	return client.DomainPatch{Contacts: &p}
+}

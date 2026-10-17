@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 
 	"github.com/vgiannoul/terraform-provider-regapi/internal/fakeapi"
 )
+
+func init() { pollInterval = time.Millisecond }
 
 func testFactories() map[string]func() (tfprotov6.ProviderServer, error) {
 	return map[string]func() (tfprotov6.ProviderServer, error){

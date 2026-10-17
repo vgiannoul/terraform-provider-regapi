@@ -86,9 +86,11 @@ func (p *regapiProvider) Configure(
 }
 
 func (p *regapiProvider) Resources(context.Context) []func() resource.Resource {
-	return []func() resource.Resource{NewContactResource, NewAccountDefaultsResource}
+	return []func() resource.Resource{
+		NewContactResource, NewAccountDefaultsResource, NewDomainResource,
+	}
 }
 
 func (p *regapiProvider) DataSources(context.Context) []func() datasource.DataSource {
-	return nil
+	return []func() datasource.DataSource{NewDomainDataSource}
 }
