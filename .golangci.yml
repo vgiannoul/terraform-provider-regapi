@@ -1,0 +1,15 @@
+version: "2"
+run:
+  timeout: 5m
+linters:
+  default: standard
+  enable: [errorlint, funlen, gocyclo, gosec, lll, misspell, revive, unparam]
+  settings:
+    funlen: {lines: 100, statements: -1}
+    gocyclo: {min-complexity: 9}
+    lll: {line-length: 100}
+formatters:
+  enable: [gofmt, goimports]
+  settings:
+    goimports:
+      local-prefixes: [github.com/vgiannoul/terraform-provider-regapi]

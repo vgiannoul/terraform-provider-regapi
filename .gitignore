@@ -1,0 +1,5 @@
+/terraform-provider-regapi
+dist/
+.terraform*
+*.tfstate*
+.DS_Store
