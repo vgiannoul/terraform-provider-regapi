@@ -1,0 +1,1157 @@
+# Vendored from the RegAPI repository at b7053ef; update with scripts/vendor-openapi.sh.
+openapi: 3.1.0
+info:
+  title: RegAPI
+  version: v1
+  description: |
+    API-first registrar for .gr domains.
+
+    - Authenticate with `Authorization: Bearer <token>`: an API key (`rk_…`) or a session
+      token (`rs_…`) from magic-link login.
+    - Every POST and PATCH needs an `Idempotency-Key` header. Retrying with the same key
+      and body returns the original response (with `Idempotent-Replayed: true`); reusing a
+      key for a different request fails with `idempotency_key_reused`.
+    - Orders are paid one by one. The first order returns a checkout URL for a person to pay;
+      the card is saved (unless `save_card: false`) and later orders are charged to it
+      automatically. If the registry refuses a paid order, the payment is refunded.
+    - Errors are `{"error": {"code", "message"}}` with stable, machine-readable codes.
+    - Every response has an `X-Request-Id` header: yours, if you send a well-formed one
+      (1-64 of `A-Za-z0-9._-`), otherwise a new one. Quote it when asking for support.
+servers:
+  - url: https://api.regapi.dev
+security:
+  - apiKey: []
+
+paths:
+  /healthz:
+    get:
+      summary: Liveness and database check
+      security: []
+      responses:
+        "200": {description: OK}
+        "503": {$ref: "#/components/responses/Error"}
+  /openapi.yaml:
+    get:
+      summary: This document
+      security: []
+      responses:
+        "200": {description: The OpenAPI document}
+  /webhooks/payments:
+    get:
+      summary: Payment provider webhook verification
+      description: Called by the payment provider (Viva) when the webhook URL is registered.
+      security: []
+      responses:
+        "200": {description: Provider-specific verification response}
+    post:
+      summary: Payment provider event
+      description: |
+        Called by the payment provider when a payment changes. The body is not trusted; the
+        payments it names are re-read from the provider before any order moves on.
+      security: []
+      responses:
+        "200": {description: Acknowledged}
+  /admin/v1/accounts:
+    post:
+      summary: Create an account (operator only)
+      description: Requires the admin token as bearer. Returns the account's first API key once.
+      security: [{adminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NewAccount"}
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  account: {$ref: "#/components/schemas/Account"}
+                  api_key: {type: string, example: rk_4f3k...}
+        "401": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+  /admin/v1/accounts/{id}/api-keys:
+    post:
+      summary: Issue another API key for an account (operator only)
+      description: For key rotation or lost keys. Existing keys keep working.
+      security: [{adminToken: []}]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  api_key: {type: string}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /admin/v1/invites:
+    post:
+      summary: Invite an email address to sign up (operator only)
+      description: |
+        Matters when the platform runs with `--invite-only`: an address that is neither invited
+        nor already an account receives no login link. Inviting an invited address again changes
+        nothing and returns 200. The address is lower-cased and trimmed.
+      security: [{adminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: {type: string, example: friend@example.com}
+                note: {type: string, maxLength: 200}
+              additionalProperties: false
+      responses:
+        "201":
+          description: Invited
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Invite"}
+        "200":
+          description: Already invited
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Invite"}
+        "401": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+    get:
+      summary: List the invited addresses (operator only)
+      security: [{adminToken: []}]
+      responses:
+        "200":
+          description: Oldest invite first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  invites:
+                    type: array
+                    items: {$ref: "#/components/schemas/Invite"}
+        "401": {$ref: "#/components/responses/Error"}
+  /admin/v1/invites/{email}:
+    delete:
+      summary: Withdraw an invite (operator only)
+      description: |
+        Stops a new sign-up from that address. An account that was already created stays; suspend
+        it to lock it out.
+      security: [{adminToken: []}]
+      parameters: [{name: email, in: path, required: true, schema: {type: string}}]
+      responses:
+        "204": {description: Withdrawn}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /admin/v1/bank-transfers:
+    get:
+      summary: Bank transfers to look for, and to send back (operator only)
+      description: |
+        For payments by bank transfer. `awaiting` are the transfers customers were asked to make and
+        nobody has recorded; look for each `reference` and amount on the bank statement. `refunds` are
+        paid orders that failed: wire the amount back. Oldest first.
+      security: [{adminToken: []}]
+      responses:
+        "200":
+          description: The transfers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  awaiting:
+                    type: array
+                    items: {$ref: "#/components/schemas/BankTransferEntry"}
+                  refunds:
+                    type: array
+                    items: {$ref: "#/components/schemas/BankTransferEntry"}
+        "401": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /admin/v1/bank-transfers/{reference}/confirm:
+    post:
+      summary: Record that a bank transfer arrived (operator only)
+      description: |
+        The order goes on at once. Only the exact amount is accepted (409 `amount_mismatch`); a short
+        or surplus transfer is settled with the customer by hand. Repeating it changes nothing; a
+        payment that already expired or failed is a 409 `payment_not_pending`.
+      security: [{adminToken: []}]
+      parameters:
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+        - {name: reference, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount_cents]
+              properties:
+                amount_cents: {type: integer, description: The amount seen on the bank statement}
+              additionalProperties: false
+      responses:
+        "200": {description: Confirmed}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /admin/v1/bank-transfers/{reference}/refunded:
+    post:
+      summary: Record that a refund was wired back (operator only)
+      description: |
+        Finishes the refund of a failed paid order. 409 `not_refund_pending` for a payment that is not
+        waiting for a refund.
+      security: [{adminToken: []}]
+      parameters:
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+        - {name: reference, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Refund recorded}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /admin/v1/documents:
+    get:
+      summary: List invoices and credit notes issued by hand (operator only)
+      description: |
+        Only for the `offline` invoice provider: the documents the platform could not issue itself.
+        Each carries what is needed to issue it (customer, lines, amount, payment reference). A credit
+        note appears once its invoice is issued and refers to it. Oldest first.
+      security: [{adminToken: []}]
+      parameters:
+        - {name: status, in: query, schema: {type: string, enum: [pending, issued, failed], default: pending}}
+      responses:
+        "200":
+          description: The documents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  documents:
+                    type: array
+                    items: {$ref: "#/components/schemas/Document"}
+        "401": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /admin/v1/documents/{id}/issue:
+    post:
+      summary: Record that a document was issued by hand (operator only)
+      description: |
+        `number` is the number of the document issued outside the platform. Repeating the same number
+        changes nothing; another number for an issued document is a 409.
+      security: [{adminToken: []}]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [number]
+              properties:
+                number: {type: string, maxLength: 64}
+                document_url: {type: string, maxLength: 500, description: An https link to the document}
+              additionalProperties: false
+      responses:
+        "200":
+          description: Issued
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Document"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/auth/magic-link:
+    post:
+      summary: Email a login link
+      description: |
+        Sends a link, valid once for 15 minutes, that logs in to the account for this email,
+        creating it on first login. Always 202 for a valid address, whether or not an account
+        exists. At most 3 links per address per 15 minutes; rate-limited per client IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: {type: string}
+      responses:
+        "202": {description: Accepted}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /v1/auth/sessions:
+    post:
+      summary: Exchange a login link's token for a session
+      description: |
+        Redeems the token from a login link (once) and returns a bearer session token valid
+        for 30 days. Rate-limited per client IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: {type: string}
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Session"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/auth/sessions/current:
+    delete:
+      summary: End the calling session
+      description: Only for session tokens; API keys are revoked with DELETE /v1/api-keys/{id}.
+      responses:
+        "204": {description: Ended}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/api-keys:
+    get:
+      summary: List API keys
+      description: Unrevoked API keys, newest first. Sessions are not listed.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  api_keys:
+                    type: array
+                    items: {$ref: "#/components/schemas/APIKey"}
+    post:
+      summary: Create an API key
+      description: |
+        Returns the secret once. This request is not replayed by Idempotency-Key, because
+        the secret is never stored: a retry creates another key, which you can revoke.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: {type: string, maxLength: 100}
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: "#/components/schemas/APIKey"}
+                  - type: object
+                    properties:
+                      api_key: {type: string, description: "The secret, starts with rk_"}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/api-keys/{id}:
+    delete:
+      summary: Revoke an API key
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "204": {description: Revoked}
+        "404": {$ref: "#/components/responses/Error"}
+  /v1/account:
+    get:
+      summary: The calling account and its saved card
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  account: {$ref: "#/components/schemas/Account"}
+                  saved_card:
+                    oneOf:
+                      - {$ref: "#/components/schemas/SavedCard"}
+                      - {type: "null"}
+                  onboarding:
+                    type: object
+                    description: Setup still missing before registering with only a name.
+                    properties:
+                      default_contact: {type: boolean}
+                      saved_card: {type: boolean}
+                  legal:
+                    type: object
+                    description: |
+                      Present only when the platform requires acceptance of its legal documents.
+                      Registering a domain is refused (403 `terms_not_accepted`) until `accepted`.
+                    properties:
+                      required:
+                        type: object
+                        additionalProperties: {type: string}
+                        example: {terms: "2026-10-10", privacy: "2026-10-10"}
+                      accepted: {type: boolean}
+                      missing: {type: array, items: {type: string}}
+        "401": {$ref: "#/components/responses/Error"}
+    patch:
+      summary: Set the default contact
+      parameters: [{$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                default_contact_id: {type: string}
+                default_admin_contact_id: {type: string, description: '"" clears it'}
+                default_tech_contact_id: {type: string, description: '"" clears it'}
+                default_billing_contact_id: {type: string, description: '"" clears it'}
+      responses:
+        "200": {description: The account, as GET /v1/account returns it}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/account/acceptances:
+    post:
+      summary: Accept the terms of service and the privacy notice
+      description: |
+        Send each required document with the version being accepted, exactly as `legal.required` in
+        `GET /v1/account` lists them. Accepting again changes nothing; any other version, or a missing or
+        extra document, is a 422. By accepting you confirm you have read the documents.
+      parameters: [{$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: {type: string}
+              example: {terms: "2026-10-10", privacy: "2026-10-10"}
+      responses:
+        "200":
+          description: The account's acceptance status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  required: {type: object, additionalProperties: {type: string}}
+                  accepted: {type: boolean}
+                  missing: {type: array, items: {type: string}}
+        "401": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/account/saved-card:
+    delete:
+      summary: Forget the saved card
+      description: Later orders need a checkout again until a new card is saved.
+      responses:
+        "204": {description: Deleted}
+  /v1/contacts:
+    post:
+      summary: Create a contact (registrant, admin, tech or billing)
+      description: The contact is created at the registry; domains reference it by ID.
+      parameters: [{$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ContactInput"}
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Contact"}
+        "422": {$ref: "#/components/responses/Error"}
+    get:
+      summary: List contacts
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contacts:
+                    type: array
+                    items: {$ref: "#/components/schemas/Contact"}
+  /v1/contacts/{id}:
+    get:
+      summary: Get a contact
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Contact"}
+        "404": {$ref: "#/components/responses/Error"}
+    patch:
+      summary: Change a contact
+      description: |
+        Replaces the contact's details (same fields as creating one). The registry is
+        updated first; if it refuses (invalid_contact), nothing changes. `first_name`,
+        `last_name`, `name_prefix` and `company_name` cannot be changed: send them as
+        stored, or 422 `contact_name_immutable`. Create a new contact for another name.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ContactInput"}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Contact"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+    delete:
+      summary: Delete a contact
+      description: |
+        Removes the contact from RegAPI; its handle at the registrar is left there. 409
+        contact_in_use, with `used_by`, while a domain, an unfinished order or an account
+        default still uses it.
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "204": {description: Deleted}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+  /v1/domains/search:
+    get:
+      summary: Suggest names (public, cached)
+      description: |
+        Builds names from q (a label such as acme, or a name such as acme.gr) across the
+        zones this server registers. Answers are cached for up to 5 minutes, so they can
+        be out of date: POST /v1/domains/check before registering. Rate-limited per client IP.
+      security: []
+      parameters:
+        - {name: q, in: query, required: true, schema: {type: string}, example: acme}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 20, default: 10}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      allOf:
+                        - {$ref: "#/components/schemas/CheckResult"}
+                        - type: object
+                          properties:
+                            checked_at: {type: string, format: date-time}
+                  note: {type: string}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/domains/check:
+    post:
+      summary: Check up to 20 names, live
+      description: |
+        Asks the registry now. Call it right before registering. Read-only: no
+        Idempotency-Key needed. reason is domain_unavailable, invalid_name, premium_name (a premium price RegAPI does not sell) or
+        extension_not_supported; price is for the default term.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domains]
+              properties:
+                domains: {type: array, minItems: 1, maxItems: 20, items: {type: string}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items: {$ref: "#/components/schemas/CheckResult"}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/domains:
+    post:
+      summary: Register a domain
+      description: |
+        Creates an order and collects its price. With a saved card (and no
+        `payment_method: checkout`) the card is charged and the order is `provisioning`
+        at once. Otherwise the order is `awaiting_payment` and `payment.checkout_url` must be
+        opened and paid by a person, or, when the server takes bank transfers, `payment.instructions`
+        say what to wire (a saved card does not exist then). Poll `GET /v1/orders/{id}` until `state` is `completed`
+        or `failed` (see `error_code`; paid orders that fail are refunded).
+      parameters: [{$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RegisterRequest"}
+      responses:
+        "202":
+          description: Accepted
+          headers:
+            Location:
+              description: The order to poll, /v1/orders/{id}; repeated on idempotent replays
+              schema: {type: string}
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order: {$ref: "#/components/schemas/Order"}
+        "409": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+    get:
+      summary: List domains
+      description: In name order, one page at a time; pass `next` as `after` for the next page.
+      parameters:
+        - {name: after, in: query, schema: {type: string}, description: The previous page's next}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  domains:
+                    type: array
+                    items: {$ref: "#/components/schemas/Domain"}
+                  next: {type: string, description: Cursor of the next page; empty on the last page}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/domains/{name}/transfer:
+    get:
+      summary: Price a transfer to RegAPI
+      description: |
+        What moving a domain registered elsewhere here costs, before ordering. 422
+        `domain_not_registered` if nobody holds the name, 409 `domain_taken` if it is
+        already in an account here. A price of 0 means the transfer is free.
+      parameters:
+        - {name: name, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TransferQuote"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+    post:
+      summary: Transfer a domain to RegAPI
+      description: |
+        Orders the transfer of a domain registered at another registrar. Before calling it,
+        unlock the domain at the current registrar and get its auth code (EPP code). Pays
+        like a registration (saved card, else a checkout; a free transfer needs no payment).
+        Then the operator asks the registrar to move the domain and polls it. Poll
+        `GET /v1/orders/{id}` until `state` is `completed` or `failed`. A wrong auth code or a
+        refused transfer ends the order `failed` (`auth_code_invalid`, `transfer_rejected`) and
+        the payment is refunded. Transfers can take days. 503 `transfers_unavailable` when the
+        server has transfers turned off.
+      parameters:
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+        - {name: name, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TransferRequest"}
+      responses:
+        "202":
+          description: Accepted
+          headers:
+            Location:
+              description: The order to poll, /v1/orders/{id}; repeated on idempotent replays
+              schema: {type: string}
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order: {$ref: "#/components/schemas/Order"}
+        "409": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/domains/{name}:
+    get:
+      summary: Get a domain
+      parameters: [{$ref: "#/components/parameters/DomainName"}]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Domain"}
+        "404": {$ref: "#/components/responses/Error"}
+    patch:
+      summary: Change nameservers, auto-renew or contacts
+      description: Applied asynchronously; watch `nameservers`, `contacts` and `last_error_code`.
+      parameters:
+        - {$ref: "#/components/parameters/DomainName"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nameservers: {type: array, maxItems: 13, items: {type: string}}
+                auto_renew: {type: boolean}
+                contacts:
+                  type: object
+                  description: |
+                    Any of registrant, admin, tech, billing as a contact ID; "" clears admin,
+                    tech or billing. The registrant may change only to a contact with the same
+                    first name, last name, prefix and company (422
+                    registrant_change_needs_trade otherwise). Applied asynchronously: poll
+                    `contacts` on GET.
+                  properties:
+                    registrant: {type: string}
+                    admin: {type: string}
+                    tech: {type: string}
+                    billing: {type: string}
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Domain"}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/domains/{name}/auth-code:
+    post:
+      summary: Get the auth code to move a domain to another registrar
+      description: |
+        Asks the registry for the domain's transfer authorization code (EPP code), which
+        the new registrar needs. It only reads: no order, payment or invoice is involved,
+        nothing about the domain changes, and nothing is charged. The code is returned in
+        this response only; it is not stored and a repeated call asks the registry again.
+        Some registries email the code to the registrant instead of returning it, then
+        `sent_to_registrant` is true and `auth_code` is absent. 409 `domain_not_active` until
+        the domain is active, 422 `auth_code_unavailable` if the registry offers no way to
+        retrieve it, 429 `rate_limited` after repeated requests. Responses are not replayed
+        for an `Idempotency-Key`.
+      parameters:
+        - {$ref: "#/components/parameters/DomainName"}
+      responses:
+        "200":
+          description: OK
+          headers:
+            Cache-Control: {schema: {type: string, enum: [no-store]}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AuthCode"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/orders:
+    get:
+      summary: List orders
+      description: |
+        Newest first, one page at a time; pass `next` as `after` for the next page. Payment
+        details are on GET /v1/orders/{id}.
+      parameters:
+        - {name: after, in: query, schema: {type: string}, description: The previous page's next}
+        - name: state
+          in: query
+          schema: {type: string, enum: [awaiting_payment, provisioning, completed, failed]}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orders:
+                    type: array
+                    items: {$ref: "#/components/schemas/Order"}
+                  next: {type: string, description: Cursor of the next page; empty on the last page}
+        "422": {$ref: "#/components/responses/Error"}
+  /v1/orders/{id}:
+    get:
+      summary: Get an order
+      description: An order awaiting payment is re-checked with the payment provider first.
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Order"}
+        "404": {$ref: "#/components/responses/Error"}
+
+components:
+  securitySchemes:
+    apiKey: {type: http, scheme: bearer, description: "API key (rk_…) or session token (rs_…)"}
+    adminToken: {type: http, scheme: bearer, description: Operator admin token}
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, minLength: 1, maxLength: 255}
+    DomainName:
+      name: name
+      in: path
+      required: true
+      schema: {type: string}
+      example: example.gr
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+  schemas:
+    Document:
+      type: object
+      properties:
+        id: {type: string}
+        kind: {type: string, enum: [invoice, credit_note]}
+        status: {type: string, enum: [pending, issued, failed]}
+        created_at: {type: string, format: date-time}
+        order_id: {type: string}
+        payment_status: {type: string}
+        payment_ref: {type: string}
+        amount_cents: {type: integer}
+        currency: {type: string}
+        customer:
+          type: object
+          properties:
+            name: {type: string}
+            email: {type: string}
+            tax_id: {type: string}
+            country_code: {type: string}
+            street: {type: string}
+            city: {type: string}
+            postal_code: {type: string}
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              description: {type: string}
+              quantity: {type: integer}
+              amount_cents: {type: integer}
+              currency: {type: string}
+        reason: {type: string}
+        number: {type: string}
+        document_url: {type: string}
+        refers_to:
+          type: object
+          properties:
+            id: {type: string}
+            number: {type: string}
+    Invite:
+      type: object
+      properties:
+        email: {type: string}
+        note: {type: string}
+        invited_at: {type: string, format: date-time}
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: |
+                Stable code, e.g. unauthenticated, not_found, invalid_request,
+                idempotency_key_required, idempotency_key_reused, request_in_progress,
+                domain_taken, invalid_contact, invalid_nameserver, invalid_term,
+                registry_unavailable, provider_unavailable, email_taken, default_contact_missing, contact_in_use,
+                registrant_change_needs_trade, price_changed, extension_not_supported, rate_limited,
+                login_link_invalid, login_unavailable, account_suspended. Orders also carry
+                error_code payment_failed, payment_expired or payment_unavailable.
+            message: {type: string}
+            used_by:
+              type: array
+              description: What still uses the resource, with contact_in_use.
+              items:
+                type: object
+                properties:
+                  kind: {type: string, enum: [domain, order, account_default]}
+                  id: {type: string}
+                  role: {type: string, enum: [registrant, admin, tech, billing]}
+    Session:
+      type: object
+      properties:
+        session_token: {type: string, description: "Bearer token, starts with rs_"}
+        expires_at: {type: string, format: date-time}
+    APIKey:
+      type: object
+      properties:
+        id: {type: string}
+        name: {type: string}
+        prefix: {type: string, description: First characters of the key, to recognise it}
+        created_at: {type: string, format: date-time}
+        last_used_at: {type: [string, "null"], format: date-time}
+    NewAccount:
+      type: object
+      required: [email]
+      properties:
+        email: {type: string}
+        company_name: {type: string}
+        tax_id: {type: string}
+        country: {type: string, description: ISO 3166-1 alpha-2}
+    Account:
+      type: object
+      properties:
+        id: {type: string}
+        email: {type: string}
+        company_name: {type: string}
+        tax_id: {type: string}
+        country: {type: string}
+        status: {type: string, enum: [active, suspended]}
+        default_contact_id:
+          type: string
+          description: Registrant used when a registration names none; empty when unset.
+        default_admin_contact_id:
+          type: string
+          description: Administrative contact used when an order names none; empty when unset.
+        default_tech_contact_id:
+          type: string
+          description: Technical contact used when an order names none; empty when unset.
+        default_billing_contact_id:
+          type: string
+          description: Billing contact used when an order names none; empty when unset.
+        created_at: {type: string, format: date-time}
+    SavedCard:
+      type: object
+      properties:
+        last4: {type: string}
+        created_at: {type: string, format: date-time}
+    ContactInput:
+      type: object
+      required: [first_name, last_name, email, country_code]
+      properties:
+        first_name: {type: string}
+        last_name: {type: string}
+        name_prefix: {type: string, description: "Optional, for example van der."}
+        company_name: {type: string, description: "For a company; for .gr include the legal form, e.g. Acme IKE."}
+        email: {type: string}
+        phone: {type: string, example: "+30.2101234567", description: "Required, in the form +CC.NUMBER."}
+        street: {type: string, description: "Street name. Required when country_code is GR."}
+        number: {type: string, description: "House number. Required when country_code is GR."}
+        suffix: {type: string, description: "For example A in 12A."}
+        city: {type: string, description: "Required when country_code is GR."}
+        postal_code: {type: string, description: "Required when country_code is GR."}
+        state: {type: string, example: Attica, description: "State or region. Required when country_code is GR."}
+        country_code: {type: string}
+        tax_id: {type: string}
+    Contact:
+      allOf:
+        - {$ref: "#/components/schemas/ContactInput"}
+        - type: object
+          properties:
+            id: {type: string}
+            created_at: {type: string, format: date-time}
+    RegisterRequest:
+      type: object
+      required: [domain_name]
+      properties:
+        domain_name: {type: string, example: example.gr}
+        years:
+          type: integer
+          minimum: 1
+          maximum: 10
+          description: "Allowed terms depend on the TLD (.gr: 2, 4, ... 10; most others 1 to 10). Default: the TLD's minimum term (2 for .gr, 1 for most others)."
+        contacts:
+          type: object
+          description: |
+            Roles left out use the account's default for that role. Registrant: 422
+            default_contact_missing without one. Admin, tech and billing: unset without one.
+            Defaults are read when the order is placed.
+          properties:
+            registrant: {type: string, description: Contact ID}
+            admin: {type: string}
+            tech: {type: string}
+            billing: {type: string}
+        nameservers:
+          type: array
+          maxItems: 13
+          items: {type: string}
+          description: |
+            Default: the registrar's default nameservers; the order and the domain then carry a
+            set_nameservers notice.
+        auto_renew: {type: boolean}
+        payment_method:
+          type: string
+          enum: [saved_card, checkout]
+          description: Default is the saved card when the account has one, otherwise checkout.
+        save_card:
+          type: boolean
+          default: true
+          description: Save the checkout's card for later orders and renewals.
+        expected_price_cents:
+          type: integer
+          description: |
+            The price you expect (e.g. from POST /v1/domains/check). If the current price
+            differs, the order is refused with 409 price_changed and nothing is charged.
+    TransferQuote:
+      type: object
+      properties:
+        domain_name: {type: string}
+        amount_cents: {type: integer, description: 0 when the transfer is free}
+        currency: {type: string}
+        years: {type: integer, description: The term the registrar adds with the transfer}
+    TransferRequest:
+      type: object
+      required: [auth_code]
+      properties:
+        auth_code: {type: string, maxLength: 128, description: The auth (EPP) code from the current registrar; never returned}
+        contacts:
+          type: object
+          description: Default is the account's default contact as registrant.
+          properties:
+            registrant: {type: string, description: Contact ID}
+            admin: {type: string}
+            tech: {type: string}
+            billing: {type: string}
+        nameservers:
+          type: array
+          maxItems: 13
+          items: {type: string}
+          description: Optional; omitted uses the nameservers the domain has now, looked up in DNS (422 `nameservers_required` when none are found).
+        auto_renew: {type: boolean}
+        payment_method: {type: string, enum: [saved_card, checkout]}
+        save_card: {type: boolean, default: true}
+        expected_price_cents:
+          type: integer
+          description: The price from GET /v1/domains/{name}/transfer; if it differs, 409 price_changed.
+    AuthCode:
+      type: object
+      properties:
+        auth_code: {type: string, description: The transfer authorization code; absent when sent to the registrant}
+        sent_to_registrant: {type: boolean, description: The registry emailed the code to the domain's registrant}
+    BankTransferEntry:
+      type: object
+      properties:
+        reference: {type: string, description: The reason the customer was told to give}
+        order_id: {type: string}
+        kind: {type: string, enum: [register, renew, transfer]}
+        domain_name: {type: string}
+        account_email: {type: string}
+        amount_cents: {type: integer}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time, description: When an unpaid order is cancelled}
+    Order:
+      type: object
+      properties:
+        id: {type: string}
+        kind: {type: string, enum: [register, renew, transfer]}
+        domain_name: {type: string}
+        years: {type: integer}
+        amount_cents: {type: integer}
+        currency: {type: string}
+        state: {type: string, enum: [awaiting_payment, provisioning, completed, failed]}
+        error_code: {type: string}
+        error_message: {type: string}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        notices:
+          type: array
+          description: For the nameservers the order registers with; the domain's notices are current.
+          items: {$ref: "#/components/schemas/Notice"}
+        payment:
+          type: object
+          description: The latest attempt to collect the order's price.
+          properties:
+            method: {type: string, enum: [checkout, saved_card, bank_transfer]}
+            status:
+              type: string
+              enum: [pending, completed, failed, expired, refund_pending, refunded]
+            checkout_url:
+              type: string
+              description: Present while a checkout is waiting to be paid.
+            instructions:
+              type: object
+              description: |
+                Present while a bank transfer is awaited (when the server takes payments by bank
+                transfer instead of at a checkout). Wire `amount_cents` to the `iban`, with `reference`
+                as the reason of the transfer; the order starts when the money is seen at the bank.
+              properties:
+                beneficiary: {type: string}
+                iban: {type: string}
+                bic: {type: string}
+                reference: {type: string}
+                amount_cents: {type: integer}
+                currency: {type: string}
+    Notice:
+      type: object
+      properties:
+        code: {type: string, enum: [set_nameservers, complete_payment, pay_by_bank_transfer]}
+        message: {type: string}
+        action:
+          type: object
+          description: |
+            What resolves the notice: an API call (method, path, field), or a page a person
+            must open (url), e.g. the checkout of an unpaid order.
+          properties:
+            method: {type: string}
+            path: {type: string}
+            field: {type: string}
+            url: {type: string}
+    Price:
+      type: object
+      properties:
+        amount_cents: {type: integer}
+        currency: {type: string}
+        years: {type: integer}
+    CheckResult:
+      type: object
+      properties:
+        domain_name: {type: string}
+        registrable: {type: boolean}
+        reason: {type: string, enum: [domain_unavailable, invalid_name, extension_not_supported, premium_name]}
+        price: {$ref: "#/components/schemas/Price"}
+    Domain:
+      type: object
+      properties:
+        domain_name: {type: string}
+        phase: {type: string, enum: [Pending, Registering, Active, Failed, Releasing, Released]}
+        expiry_date: {type: string, format: date-time}
+        nameservers: {type: array, items: {type: string}}
+        nameservers_source: {type: string, enum: [default, custom]}
+        notices: {type: array, items: {$ref: "#/components/schemas/Notice"}}
+        auto_renew: {type: boolean}
+        contacts:
+          type: object
+          description: |
+            The RegAPI contacts the domain uses, by role. A role is null when it is unset or its
+            registry handle belongs to none of your contacts (for example after a transfer in).
+          properties:
+            registrant: {type: [string, "null"]}
+            admin: {type: [string, "null"]}
+            tech: {type: [string, "null"]}
+            billing: {type: [string, "null"]}
+        last_error_code: {type: string}
+        last_error_message: {type: string}
+        updated_at: {type: string, format: date-time}
