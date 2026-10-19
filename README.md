@@ -54,9 +54,9 @@ A complete agency example is in [`examples/agency/main.tf`](examples/agency/main
   domain, and destroying a domain or registration resource all print a warning in
   `terraform plan`. Destroying a `regapi_domain` or `regapi_domain_registration` only removes
   it from state; the domain stays registered.
-- **The default registrant cannot be cleared through the API.** Use a registrant contact that
-  Terraform does not manage, otherwise destroying the whole configuration fails with
-  `contact_in_use` for that contact.
+- **Destroying `regapi_account_defaults` clears all four defaults**, the registrant included, so
+  the contacts can be deleted in the same destroy. This needs a RegAPI release that lets the
+  default registrant be cleared; on an older one the destroy fails with a 422.
 - **A contact a domain uses cannot be deleted** (`contact_in_use`, with the list of what uses
   it). Move the domain to another contact first; use `create_before_destroy` when you replace
   a contact.

@@ -60,9 +60,8 @@ func (s *Server) getAccount(w http.ResponseWriter, _ *http.Request) {
 }
 
 type defaultField struct {
-	val       *string
-	dst       *string
-	clearable bool
+	val *string
+	dst *string
 }
 
 // refuseDefault answers the API's refusal of one default contact change, if any.
@@ -70,9 +69,6 @@ func (s *Server) refuseDefault(w http.ResponseWriter, f defaultField) bool {
 	switch {
 	case f.val == nil:
 		return false
-	case *f.val == "" && !f.clearable:
-		writeError(w, http.StatusUnprocessableEntity, "invalid_request",
-			"the default registrant cannot be cleared", nil)
 	case *f.val != "" && !s.hasContact(*f.val):
 		notFound(w, "contact")
 	default:
@@ -92,10 +88,10 @@ func (s *Server) patchAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fields := []defaultField{
-		{in.Registrant, &s.account.DefaultContactID, false},
-		{in.Admin, &s.account.DefaultAdminContactID, true},
-		{in.Tech, &s.account.DefaultTechContactID, true},
-		{in.Billing, &s.account.DefaultBillingContactID, true},
+		{in.Registrant, &s.account.DefaultContactID},
+		{in.Admin, &s.account.DefaultAdminContactID},
+		{in.Tech, &s.account.DefaultTechContactID},
+		{in.Billing, &s.account.DefaultBillingContactID},
 	}
 	for _, f := range fields {
 		if s.refuseDefault(w, f) {

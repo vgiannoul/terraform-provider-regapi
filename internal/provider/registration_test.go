@@ -14,7 +14,7 @@ import (
 )
 
 // registrationConfig sets the account's default registrant to an existing contact (created
-// outside Terraform: the registrant default cannot be cleared) and registers acme.gr.
+// outside Terraform, so it survives the test) and registers acme.gr.
 func registrationConfig(owner, extra string) string {
 	return `
 resource "regapi_account_defaults" "d" {

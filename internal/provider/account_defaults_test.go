@@ -26,23 +26,36 @@ resource "regapi_contact" "agency" {
 }
 `
 
-// The registrant default cannot be cleared through the API, so the registrant contact is
-// created outside Terraform: managing it would make every destroy fail with contact_in_use.
+// ownerContact is a registrant that tests create outside Terraform where they need one that
+// survives the test.
 var ownerContact = client.Contact{FirstName: "Ana", LastName: "Test", Email: "a@x.gr",
 	CountryCode: "GR", Street: "Odos", Number: "1", City: "Athens", PostalCode: "10431",
 	State: "Attica"}
 
-func defaultsConfig(owner, extra string) string {
-	return agencyContact + `
+const ownerResource = `
+resource "regapi_contact" "owner" {
+  first_name = "Ana"
+  last_name = "Test"
+  email = "a@x.gr"
+  country_code = "GR"
+  street = "Odos"
+  number = "1"
+  city = "Athens"
+  postal_code = "10431"
+  state = "Attica"
+}
+`
+
+func defaultsConfig(extra string) string {
+	return agencyContact + ownerResource + `
 resource "regapi_account_defaults" "d" {
-  registrant_contact_id = "` + owner + `"
+  registrant_contact_id = regapi_contact.owner.id
 ` + extra + `}
 `
 }
 
 func TestAccountDefaultsLifecycle(t *testing.T) {
-	f, cfg := startFake(t)
-	owner := f.AddContact(ownerContact)
+	_, cfg := startFake(t)
 	all := `  admin_contact_id   = regapi_contact.agency.id
   tech_contact_id    = regapi_contact.agency.id
   billing_contact_id = regapi_contact.agency.id
@@ -51,17 +64,17 @@ func TestAccountDefaultsLifecycle(t *testing.T) {
 		ProtoV6ProviderFactories: testFactories(),
 		Steps: []resource.TestStep{
 			{
-				Config: cfg + defaultsConfig(owner, all),
+				Config: cfg + defaultsConfig(all),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttrPair("regapi_account_defaults.d",
 						"admin_contact_id", "regapi_contact.agency", "id"),
-					resource.TestCheckResourceAttr("regapi_account_defaults.d",
-						"registrant_contact_id", owner)),
+					resource.TestCheckResourceAttrPair("regapi_account_defaults.d",
+						"registrant_contact_id", "regapi_contact.owner", "id")),
 			},
 			{ResourceName: "regapi_account_defaults.d", ImportState: true,
 				ImportStateVerify: true},
 			{
-				Config: cfg + defaultsConfig(owner, ""),
+				Config: cfg + defaultsConfig(""),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckNoResourceAttr("regapi_account_defaults.d", "admin_contact_id"),
 					resource.TestCheckNoResourceAttr("regapi_account_defaults.d", "tech_contact_id")),
@@ -70,19 +83,23 @@ func TestAccountDefaultsLifecycle(t *testing.T) {
 	})
 }
 
-func TestDestroyingDefaultsClearsOnlyAdminTechAndBilling(t *testing.T) {
+// Destroying the whole configuration works because the defaults, registrant included, are
+// cleared before the contacts are deleted.
+func TestDestroyingDefaultsClearsAllFourSoTheContactsCanGo(t *testing.T) {
 	f, cfg := startFake(t)
-	owner := f.AddContact(ownerContact)
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: testFactories(),
 		Steps: []resource.TestStep{
-			{Config: cfg + defaultsConfig(owner, "  admin_contact_id = regapi_contact.agency.id\n")},
+			{Config: cfg + defaultsConfig("  admin_contact_id = regapi_contact.agency.id\n")},
 			{
-				Config: cfg + agencyContact,
+				Config: cfg,
 				Check: func(*terraform.State) error {
 					account := f.Account()
-					if account.DefaultContactID != owner || account.DefaultAdminContactID != "" {
+					if account != (client.Account{ID: account.ID}) {
 						return fmt.Errorf("defaults after destroy = %+v", account)
+					}
+					if n := len(f.ContactIDs()); n != 0 {
+						return fmt.Errorf("%d contacts left after destroy", n)
 					}
 					return nil
 				},
@@ -91,10 +108,10 @@ func TestDestroyingDefaultsClearsOnlyAdminTechAndBilling(t *testing.T) {
 	})
 }
 
-func TestDestroyingDefaultsWarnsThatTheRegistrantStays(t *testing.T) {
+func TestDestroyingDefaultsWarnsThatAllFourAreCleared(t *testing.T) {
 	state := &defaultsModel{ID: types.StringValue("acc_1")}
 	got := warningText(defaultsWarnings(state, nil))
-	if !strings.Contains(got, "registrant") {
+	if !strings.Contains(got, "All four") {
 		t.Errorf("warning = %q", got)
 	}
 	if ds := defaultsWarnings(state, state); len(ds) != 0 {

@@ -86,10 +86,9 @@ func (r *defaultsResource) Schema(
 	}
 	resp.Schema = schema.Schema{
 		Description: "The account's default contacts. Orders that name no contact for a role " +
-			"use these. Destroying the resource clears the administrative, technical and " +
-			"billing defaults; the default registrant stays because the API cannot clear it, " +
-			"so a contact that is the default registrant cannot be deleted afterwards. Use a " +
-			"registrant contact that Terraform does not manage.",
+			"use these. Destroying the resource clears all four defaults, so the contacts can " +
+			"be deleted afterwards. Clearing the default registrant needs a RegAPI release " +
+			"that supports it.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{Computed: true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
@@ -162,8 +161,8 @@ func (r *defaultsResource) Delete(
 	ctx context.Context, _ resource.DeleteRequest, resp *resource.DeleteResponse,
 ) {
 	empty := ""
-	_, err := r.client.SetDefaults(ctx, client.DefaultsPatch{Admin: &empty, Tech: &empty,
-		Billing: &empty})
+	_, err := r.client.SetDefaults(ctx, client.DefaultsPatch{Registrant: &empty, Admin: &empty,
+		Tech: &empty, Billing: &empty})
 	if err != nil {
 		addAPIError(&resp.Diagnostics, "Could not clear the default contacts", err)
 	}
@@ -191,6 +190,6 @@ func defaultsWarnings(state, plan *defaultsModel) []diag.Diagnostic {
 		return nil
 	}
 	return []diag.Diagnostic{diag.NewWarningDiagnostic("Clearing the default contacts",
-		"The default administrative, technical and billing contacts are cleared. The default "+
-			"registrant stays, because the API cannot clear it.")}
+		"All four default contacts are cleared. New orders then need a registrant of their "+
+			"own.")}
 }

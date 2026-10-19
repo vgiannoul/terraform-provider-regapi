@@ -3,20 +3,18 @@
 page_title: "regapi_account_defaults Resource - regapi"
 subcategory: ""
 description: |-
-  The account's default contacts. Orders that name no contact for a role use these. Destroying the resource clears the administrative, technical and billing defaults; the default registrant stays because the API cannot clear it, so a contact that is the default registrant cannot be deleted afterwards. Use a registrant contact that Terraform does not manage.
+  The account's default contacts. Orders that name no contact for a role use these. Destroying the resource clears all four defaults, so the contacts can be deleted afterwards. Clearing the default registrant needs a RegAPI release that supports it.
 ---
 
 # regapi_account_defaults (Resource)
 
-The account's default contacts. Orders that name no contact for a role use these. Destroying the resource clears the administrative, technical and billing defaults; the default registrant stays because the API cannot clear it, so a contact that is the default registrant cannot be deleted afterwards. Use a registrant contact that Terraform does not manage.
+The account's default contacts. Orders that name no contact for a role use these. Destroying the resource clears all four defaults, so the contacts can be deleted afterwards. Clearing the default registrant needs a RegAPI release that supports it.
 
 ## Example Usage
 
 ```terraform
-# The default registrant must be a contact that already exists: the API cannot clear it, so a
-# contact managed by Terraform could not be deleted again while it is the default.
 resource "regapi_account_defaults" "agency" {
-  registrant_contact_id = "con_existing"
+  registrant_contact_id = regapi_contact.owner.id
   admin_contact_id      = regapi_contact.agency.id
   tech_contact_id       = regapi_contact.agency.id
   billing_contact_id    = regapi_contact.agency.id

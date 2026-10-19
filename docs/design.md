@@ -96,8 +96,8 @@ provider "regapi" {
 
 - Singleton; the ID is the account ID. Create and update: `PATCH /v1/account`. An attribute
   removed from the configuration is cleared (`""`).
-- Destroy clears admin, tech and billing and leaves the registrant default, which the API
-  cannot clear.
+- Destroy clears all four defaults, the registrant included (RegAPI lets `PATCH /v1/account`
+  clear `default_contact_id`), so the contacts can be deleted in the same destroy.
 - Import: by account ID.
 
 ### `regapi_domain`
@@ -191,8 +191,8 @@ Each resource implements `ModifyPlan` and adds a warning diagnostic during `terr
   from Terraform state only. The domain stays registered and keeps renewing."
 - **`regapi_domain` replaced** (the name changed): "The old domain is not changed; the new
   name must already be registered."
-- **`regapi_account_defaults` destroyed:** "Clears the default admin, tech and billing
-  contacts; the default registrant stays."
+- **`regapi_account_defaults` destroyed:** "All four default contacts are cleared. New orders
+  then need a registrant of their own."
 
 Warnings never block a plan. Tests assert each warning appears in the plan for its case and
 does not appear for an in-place update.
