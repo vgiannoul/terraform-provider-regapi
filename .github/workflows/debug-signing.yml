@@ -1,0 +1,26 @@
+name: debug-signing
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7.0.0
+        id: import_gpg
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.PASSPHRASE }}
+      - name: Sign with the passphrase from stdin
+        env:
+          GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
+          GPG_PASSPHRASE: ${{ secrets.PASSPHRASE }}
+        run: |
+          echo "passphrase length: ${#GPG_PASSPHRASE}"
+          echo test > t.txt
+          if printf '%s' "${GPG_PASSPHRASE}" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 --local-user "${GPG_FINGERPRINT}" --output t.sig --detach-sign t.txt; then echo STDIN-SIGN-OK; else echo STDIN-SIGN-FAILED; fi
+          gpg --list-secret-keys --keyid-format long
