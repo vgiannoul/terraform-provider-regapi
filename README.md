@@ -93,3 +93,7 @@ TF_ACC=1 REGAPI_ENDPOINT=http://localhost:8080 REGAPI_API_KEY=rk_... make test
 
 Pushing a tag `vX.Y.Z` runs GoReleaser (`.github/workflows/release.yml`), which signs the
 checksums with the GPG key in the repository secrets `GPG_PRIVATE_KEY` and `PASSPHRASE`.
+
+## Licence
+
+MIT, see [LICENSE](LICENSE).
