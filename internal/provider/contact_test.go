@@ -105,6 +105,7 @@ resource "regapi_contact" "a" {
   first_name = "Ana"
   last_name = "Test"
   email = "a@x.gr"
+  phone = "+30.2100000000"
   country_code = "GR"
 }
 `,
@@ -123,6 +124,7 @@ resource "regapi_contact" "a" {
   first_name = "Ana"
   last_name = "Test"
   email = "a@x.gr"
+  phone = "+30.2100000000"
   country_code = "gr"
 }
 `,
@@ -171,4 +173,22 @@ func TestCreatingOrUpdatingInPlaceWarnsNothing(t *testing.T) {
 	if ds := contactWarnings(contactModelFor("Ana"), updated); len(ds) != 0 {
 		t.Errorf("in-place update warned: %v", ds)
 	}
+}
+
+func TestAContactWithoutAPhoneIsRefusedAtPlan(t *testing.T) {
+	_, cfg := startFake(t)
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: testFactories(),
+		Steps: []resource.TestStep{{
+			Config: cfg + `
+resource "regapi_contact" "a" {
+  first_name = "Ana"
+  last_name = "Test"
+  email = "a@x.gr"
+  country_code = "GR"
+}
+`,
+			ExpectError: regexp.MustCompile(`(?s)phone.*required|required.*phone`),
+		}},
+	})
 }

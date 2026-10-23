@@ -38,6 +38,7 @@ resource "regapi_contact" "client" {
 - `email` (String) Email address.
 - `first_name` (String) First name. Changing it replaces the contact.
 - `last_name` (String) Last name. Changing it replaces the contact.
+- `phone` (String) Phone number as +CC.NUMBER, for example +30.2100000000. Registries require one.
 
 ### Optional
 
@@ -45,7 +46,6 @@ resource "regapi_contact" "client" {
 - `company_name` (String) Company name with its legal form. Changing it replaces the contact.
 - `name_prefix` (String) Name prefix, for example "van der". Changing it replaces the contact.
 - `number` (String) House number.
-- `phone` (String) Phone number as +CC.NUMBER, for example +30.2100000000.
 - `postal_code` (String) Postal code.
 - `state` (String) Region, required for Greek addresses.
 - `street` (String) Street name without the number.
