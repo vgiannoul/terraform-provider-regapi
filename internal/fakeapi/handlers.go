@@ -108,7 +108,8 @@ func (s *Server) patchAccount(w http.ResponseWriter, r *http.Request) {
 
 func missingFields(c client.Contact) []string {
 	need := []struct{ name, val string }{{"first_name", c.FirstName},
-		{"last_name", c.LastName}, {"email", c.Email}, {"country_code", c.CountryCode}}
+		{"last_name", c.LastName}, {"email", c.Email}, {"phone", c.Phone},
+		{"country_code", c.CountryCode}}
 	if c.CountryCode == "GR" {
 		need = append(need, struct{ name, val string }{"street", c.Street},
 			struct{ name, val string }{"number", c.Number}, struct{ name, val string }{"city", c.City},

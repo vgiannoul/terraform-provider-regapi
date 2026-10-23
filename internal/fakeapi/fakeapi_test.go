@@ -17,8 +17,9 @@ func setup(t *testing.T) (*fakeapi.Server, *client.Client) {
 }
 
 var greek = client.Contact{FirstName: "Ana", LastName: "Test", Email: "a@x.gr",
-	CountryCode: "GR", Street: "Odos", Number: "1", City: "Athens", PostalCode: "10431",
-	State: "Attica"}
+	Phone: "+30.2100000000", CountryCode: "GR", Street: "Odos", Number: "1", City: "Athens",
+	PostalCode: "10431",
+	State:      "Attica"}
 
 func TestTheFakeRefusesAWrongKey(t *testing.T) {
 	f := fakeapi.New()
@@ -33,7 +34,8 @@ func TestTheFakeRefusesAWrongKey(t *testing.T) {
 func TestContactsFollowTheRealRules(t *testing.T) {
 	_, c := setup(t)
 	if _, err := c.CreateContact(t.Context(), client.Contact{FirstName: "Ana", LastName: "T",
-		Email: "a@x.gr", CountryCode: "GR"}); !client.IsCode(err, "invalid_request") {
+		Email: "a@x.gr", Phone: "+30.2100000000", CountryCode: "GR"}); !client.IsCode(err,
+		"invalid_request") {
 		t.Fatalf("Greek contact without an address: %v", err)
 	}
 	created, err := c.CreateContact(t.Context(), greek)

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+
+	"github.com/vgiannoul/terraform-provider-regapi/internal/client"
 )
 
 // accConfig returns a provider block for the RegAPI environment named by REGAPI_ENDPOINT and
@@ -50,24 +52,22 @@ func TestAccContactLifecycle(t *testing.T) {
 	})
 }
 
+// The registration test leaves an unpaid order behind, and a contact an unfinished order uses
+// cannot be deleted, so its registrant is created outside Terraform.
 func TestAccRegistrationAwaitsPayment(t *testing.T) {
 	cfg := accConfig(t)
+	api := client.New(os.Getenv("REGAPI_ENDPOINT"), os.Getenv("REGAPI_API_KEY"), "acc-test")
+	owner, err := api.CreateContact(t.Context(), client.Contact{FirstName: "Acc", LastName: "Owner",
+		Email: "acc@example.gr", Phone: "+30.2100000003", CountryCode: "GR", Street: "Odos",
+		Number: "1", City: "Athens", PostalCode: "10431", State: "Attica"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	name := fmt.Sprintf("acc-%d.gr", time.Now().Unix())
 	config := cfg + `
-resource "regapi_contact" "owner" {
-  first_name   = "Acc"
-  last_name    = "Owner"
-  email        = "acc@example.gr"
-  country_code = "GR"
-  street       = "Odos"
-  number       = "1"
-  city         = "Athens"
-  postal_code  = "10431"
-  state        = "Attica"
-}
 resource "regapi_domain_registration" "r" {
   domain_name           = "` + name + `"
-  registrant_contact_id = regapi_contact.owner.id
+  registrant_contact_id = "` + owner.ID + `"
 }
 `
 	resource.Test(t, resource.TestCase{

@@ -113,7 +113,9 @@ func (r *contactResource) Schema(
 					"contact."},
 			"email": schema.StringAttribute{Required: true, Validators: nonEmpty,
 				Description: "Email address."},
-			"phone":       optional("Phone number as +CC.NUMBER, for example +30.2100000000."),
+			"phone": schema.StringAttribute{Required: true, Validators: nonEmpty,
+				Description: "Phone number as +CC.NUMBER, for example +30.2100000000. " +
+					"Registries require one."},
 			"street":      optional("Street name without the number."),
 			"number":      optional("House number."),
 			"suffix":      optional("House number suffix, for example A."),
